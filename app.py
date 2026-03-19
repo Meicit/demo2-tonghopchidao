@@ -5,78 +5,47 @@ from docx import Document
 import pandas as pd
 import io
 
-# --- 1. CẤU HÌNH ---
-st.set_page_config(page_title="Hệ thống Quản lý Chỉ đạo", layout="wide")
-st.title("🏛️ Trợ lý AI Hành chính (Bản v7 - Dứt điểm lỗi)")
+# --- 1. Cấu hình ---
+st.set_page_config(page_title="AI Hành Chính", layout="wide")
+st.title("🏛️ Hệ thống Trích xuất Chỉ đạo")
 
-if 'data' not in st.session_state:
-    st.session_state['data'] = None
-
-# --- 2. BỘ DÒ TÌM MODEL KHẢ DỤNG ---
-def setup_ai():
+# Khởi tạo model an toàn
+def get_model():
     if "GEMINI_API_KEY" not in st.secrets:
-        st.error("❌ Chưa cấu hình API Key trong Secrets!")
+        st.error("Chưa có API Key!")
         return None
-    
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    
-    try:
-        # Lấy danh sách model thực tế mà Key này được dùng
-        valid_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        if not valid_models:
-            st.error("❌ Key này không có quyền chạy bất kỳ Model nào!")
-            return None
-            
-        # Ưu tiên lấy bản Flash cho nhanh
-        target = next((m for m in valid_models if "1.5-flash" in m), valid_models[0])
-        return genai.GenerativeModel(target)
-    except Exception as e:
-        st.error(f"❌ Lỗi kết nối API: {e}")
-        return None
+    # Thử dùng tên model cơ bản nhất
+    return genai.GenerativeModel('gemini-1.5-flash')
 
-model = setup_ai()
+model = get_model()
 
-# --- 3. XỬ LÝ DỮ LIỆU ---
-def extract_full_text(file):
-    try:
-        if file.type == "application/pdf":
-            return "\n".join([p.extract_text() for p in PdfReader(file).pages])
-        return "\n".join([p.text for p in Document(file).paragraphs])
-    except: return ""
+# --- 2. Xử lý file ---
+uploaded_file = st.file_uploader("Tải lên PDF/Word", type=["pdf", "docx"])
 
-def parse_table(text):
-    try:
-        lines = [l.strip() for l in text.split('\n') if '|' in l]
-        data = [l for l in lines if not any(c in l for c in [':-', '---'])]
-        if len(data) < 2: return pd.DataFrame([{"Kết quả": text}])
-        cols = [c.strip() for c in data[0].split('|') if c.strip()]
-        rows = [[c.strip() for c in l.split('|') if c.strip()] for l in data[1:]]
-        return pd.DataFrame([r for r in rows if len(r) == len(cols)], columns=cols)
-    except: return pd.DataFrame([{"Nội dung": text}])
+if uploaded_file and model:
+    # Đọc văn bản
+    text = ""
+    if uploaded_file.type == "application/pdf":
+        text = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
+    else:
+        text = "\n".join([p.text for p in Document(uploaded_file).paragraphs])
 
-# --- 4. GIAO DIỆN ---
-file = st.file_uploader("Tải file PDF/Word", type=["pdf", "docx"])
-
-if file and model:
-    if st.button("🚀 TRÍCH XUẤT ĐẦY ĐỦ"):
-        raw_text = extract_full_text(file)
-        with st.spinner("AI đang quét văn bản..."):
-            # Prompt cực ngắn để tránh lỗi quá tải
-            prompt = f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê chi tiết, không tóm tắt:\n\n{raw_text[:10000]}"
+    if st.button("🚀 Trích xuất & Tạo file Excel"):
+        with st.spinner("AI đang xử lý..."):
             try:
-                resp = model.generate_content(prompt)
-                st.session_state['data'] = resp.text
+                prompt = f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê chi tiết:\n\n{text[:10000]}"
+                response = model.generate_content(prompt)
+                res_text = response.text
+                
+                st.markdown(res_text)
+                
+                # Tạo file Excel đơn giản để tránh lỗi định dạng
+                output = io.BytesIO()
+                df_export = pd.DataFrame([{"Nội dung": res_text}])
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False)
+                
+                st.download_button("📥 Tải về Excel", output.getvalue(), "chidao.xlsx")
             except Exception as e:
-                st.error(f"Lỗi thực thi: {e}")
-
-    if st.session_state['data']:
-        st.markdown(st.session_state['data'])
-        df = parse_table(st.session_state['data'])
-        
-        # Tạo file Excel chuẩn
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as w:
-            df.to_excel(w, index=False)
-            
-        st.download_button("📥 Tải Excel đầy đủ", buf.getvalue(), f"Chi_dao_{file.name}.xlsx")
+                st.error(f"Lỗi: {e}")
