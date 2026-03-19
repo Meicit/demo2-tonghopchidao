@@ -1,7 +1,7 @@
-streamlit==1.32.0
-google-generativeai==0.5.2
+streamlit
+google-generativeai
 pypdf
 python-docx
 pandas
 openpyxl
-pydantic==2.6.4
+setuptools
