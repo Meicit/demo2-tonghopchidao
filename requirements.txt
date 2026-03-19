@@ -1,7 +1,6 @@
 streamlit
-google-generativeai
+google-genai
 pypdf
 python-docx
 pandas
 openpyxl
-setuptools
