@@ -5,47 +5,59 @@ from docx import Document
 import pandas as pd
 import io
 
-# --- 1. Cấu hình ---
-st.set_page_config(page_title="AI Hành Chính", layout="wide")
-st.title("🏛️ Hệ thống Trích xuất Chỉ đạo")
+# 1. Cấu hình trang
+st.set_page_config(page_title="Hệ thống AI Hành chính", layout="wide")
+st.title("🏛️ Trợ lý Trích xuất & Xuất Excel")
 
-# Khởi tạo model an toàn
-def get_model():
-    if "GEMINI_API_KEY" not in st.secrets:
-        st.error("Chưa có API Key!")
-        return None
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Thử dùng tên model cơ bản nhất
-    return genai.GenerativeModel('gemini-1.5-flash')
+# 2. Khởi tạo AI
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("Vui lòng thêm GEMINI_API_KEY vào mục Secrets!")
+    st.stop()
 
-model = get_model()
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. Xử lý file ---
-uploaded_file = st.file_uploader("Tải lên PDF/Word", type=["pdf", "docx"])
+# 3. Xử lý file
+file = st.file_uploader("Tải lên PDF hoặc Word", type=["pdf", "docx"])
 
-if uploaded_file and model:
-    # Đọc văn bản
+if file:
     text = ""
-    if uploaded_file.type == "application/pdf":
-        text = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
-    else:
-        text = "\n".join([p.text for p in Document(uploaded_file).paragraphs])
+    try:
+        if file.type == "application/pdf":
+            reader = PdfReader(file)
+            text = "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
+        else:
+            doc = Document(file)
+            text = "\n".join([p.text for p in doc.paragraphs])
+    except Exception as e:
+        st.error(f"Lỗi đọc file: {e}")
 
-    if st.button("🚀 Trích xuất & Tạo file Excel"):
-        with st.spinner("AI đang xử lý..."):
-            try:
-                prompt = f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê chi tiết:\n\n{text[:10000]}"
-                response = model.generate_content(prompt)
-                res_text = response.text
-                
-                st.markdown(res_text)
-                
-                # Tạo file Excel đơn giản để tránh lỗi định dạng
-                output = io.BytesIO()
-                df_export = pd.DataFrame([{"Nội dung": res_text}])
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False)
-                
-                st.download_button("📥 Tải về Excel", output.getvalue(), "chidao.xlsx")
-            except Exception as e:
-                st.error(f"Lỗi: {e}")
+    if st.button("🚀 Phân tích & Trích xuất"):
+        if not text:
+            st.warning("Không thể đọc nội dung file.")
+        else:
+            with st.spinner("AI đang xử lý..."):
+                try:
+                    # Prompt yêu cầu bảng đơn giản
+                    prompt = f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê đầy đủ, không tóm tắt:\n\n{text[:15000]}"
+                    response = model.generate_content(prompt)
+                    res_text = response.text
+                    
+                    st.markdown("### ✅ Kết quả phân tích")
+                    st.markdown(res_text)
+                    
+                    # Tạo file Excel từ kết quả
+                    output = io.BytesIO()
+                    # Chia nhỏ text thành dòng để Excel dễ nhìn hơn
+                    df_export = pd.DataFrame([{"Nội dung trích xuất": res_text}])
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_export.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        label="📥 Tải về Excel",
+                        data=output.getvalue(),
+                        file_name=f"Trich_xuat_{file.name}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as e:
+                    st.error(f"Lỗi AI: {e}")
