@@ -7,87 +7,86 @@ import io
 import re
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="AI Hành Chính v4", layout="wide")
-st.title("🏛️ Hệ thống Trích xuất Toàn diện Chỉ đạo")
+st.set_page_config(page_title="AI Hành Chính Toàn Diện", layout="wide")
+st.title("🏛️ Hệ thống Trích xuất Chỉ đạo (Bản đầy đủ)")
 
-if 'analysis_result' not in st.session_state:
-    st.session_state['analysis_result'] = None
+# Lưu kết quả vào bộ nhớ tạm
+if 'full_analysis' not in st.session_state:
+    st.session_state['full_analysis'] = None
 
-# --- KẾT NỐI AI ---
-def get_working_model():
+# --- KẾT NỐI AI (SỬA LỖI NOTFOUND) ---
+def get_model():
     if "GEMINI_API_KEY" not in st.secrets:
-        st.error("❌ Thiếu API Key!")
-        return None
+        st.error("❌ Thiếu API Key trong Secrets!")
+        st.stop()
+    
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    
+    # Thử gọi model với tên chính xác nhất để tránh lỗi NotFound
     try:
-        # Thử trực tiếp tên model flash để ổn định nhất
-        return genai.GenerativeModel('gemini-1.5-flash')
-    except: return None
+        # Sử dụng 'gemini-1.5-flash' là bản ổn định và nhanh nhất hiện nay
+        return genai.GenerativeModel('models/gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Lỗi khởi tạo Model: {e}")
+        st.stop()
 
-model = get_working_model()
+model = get_model()
 
-# --- HÀM CHUYỂN MARKDOWN THÀNH DATAFRAME (CẢI TIẾN) ---
+# --- HÀM XỬ LÝ DỮ LIỆU ---
 def markdown_to_df(md_text):
     try:
-        # Lọc ra các dòng có chứa dấu gạch đứng của bảng
-        lines = [line.strip() for line in md_text.split('\n') if '|' in line]
+        lines = [l.strip() for l in md_text.split('\n') if '|' in l]
         if len(lines) < 2: return pd.DataFrame([{"Nội dung": md_text}])
-        
-        # Loại bỏ dòng ngăn cách tiêu đề (|---|---|)
         data_lines = [l for l in lines if not re.match(r'^[|:\-\s]+$', l)]
-        
-        # Lấy tiêu đề và dữ liệu
-        raw_columns = [c.strip() for c in data_lines[0].split('|') if c.strip()]
+        cols = [c.strip() for c in data_lines[0].split('|') if c.strip()]
         rows = []
         for l in data_lines[1:]:
             row = [c.strip() for c in l.split('|') if c.strip()]
-            if len(row) >= len(raw_columns):
-                rows.append(row[:len(raw_columns)]) # Đảm bảo đúng số cột
-        
-        return pd.DataFrame(rows, columns=raw_columns)
-    except Exception as e:
-        return pd.DataFrame([{"Lỗi cấu trúc bảng": str(e), "Nội dung gốc": md_text}])
+            if len(row) >= len(cols): rows.append(row[:len(cols)])
+        return pd.DataFrame(rows, columns=cols)
+    except: return pd.DataFrame([{"Nội dung": md_text}])
 
 # --- GIAO DIỆN ---
-uploaded_file = st.file_uploader("Tải lên file văn bản (PDF, DOCX)", type=["pdf", "docx"])
+file = st.file_uploader("Tải lên văn bản (PDF, DOCX)", type=["pdf", "docx"])
 
-if uploaded_file and model:
-    if st.button("🚀 BẮT ĐẦU TRÍCH XUẤT TOÀN BỘ"):
-        # Đọc text
-        text_content = ""
-        if uploaded_file.type == "application/pdf":
-            text_content = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
-        else:
-            text_content = "\n".join([p.text for p in Document(uploaded_file).paragraphs])
-            
-        with st.spinner("AI đang quét toàn bộ văn bản..."):
-            # Prompt yêu cầu KHÔNG ĐƯỢC TÓM TẮT, PHẢI LIÊT KÊ HẾT
+if file:
+    # Đọc văn bản
+    if file.type == "application/pdf":
+        raw_text = "\n".join([p.extract_text() for p in PdfReader(file).pages])
+    else:
+        raw_text = "\n".join([p.text for p in Document(file).paragraphs])
+
+    if st.button("🚀 TRÍCH XUẤT TẤT CẢ NHIỆM VỤ"):
+        with st.spinner("AI đang quét từng dòng văn bản..."):
+            # Prompt được thiết kế để AI không dám tóm tắt
             prompt = f"""
-            Bạn là thư ký tổng hợp. Hãy đọc kỹ văn bản và trích xuất TẤT CẢ các chỉ đạo/nhiệm vụ.
-            KHÔNG ĐƯỢC TÓM TẮT. PHẢI LIỆT KÊ ĐẦY ĐỦ các nhiệm vụ xuất hiện trong văn bản.
-            Trình bày DUY NHẤT dưới dạng bảng Markdown: STT | Nhiệm vụ | Đơn vị thực hiện | Thời hạn.
+            NHIỆM VỤ: Bạn là một thư ký tổng hợp có nhiệm vụ trích xuất KHÔNG SÓT MỘT CHI TIẾT NÀO.
+            YÊU CẦU: 
+            1. Liệt kê TẤT CẢ các nhiệm vụ, chỉ đạo, lời dặn của lãnh đạo trong văn bản.
+            2. Không được tóm tắt chung chung. Một văn bản có 10 chỉ đạo phải liệt kê đủ 10 dòng.
+            3. Trình bày dạng bảng Markdown: STT | Nội dung nhiệm vụ | Đơn vị thực hiện | Thời hạn.
             
-            Văn bản:
-            {text_content[:15000]}
+            VĂN BẢN ĐẦU VÀO:
+            {raw_text}
             """
-            response = model.generate_content(prompt)
-            st.session_state['analysis_result'] = response.text
+            try:
+                response = model.generate_content(prompt)
+                st.session_state['full_analysis'] = response.text
+            except Exception as e:
+                st.error(f"Lỗi AI: {e}")
 
-    if st.session_state['analysis_result']:
-        st.markdown("### 📋 Danh sách chỉ đạo chi tiết")
-        st.markdown(st.session_state['analysis_result'])
+    # Hiển thị và Xuất dữ liệu
+    if st.session_state['full_analysis']:
+        st.markdown(st.session_state['full_analysis'])
+        df = markdown_to_df(st.session_state['full_analysis'])
         
-        # Chuyển đổi sang bảng DataFrame
-        df = markdown_to_df(st.session_state['analysis_result'])
-        
-        st.subheader("📥 Xuất dữ liệu")
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='NhiemVuChiTiet')
+            df.to_excel(writer, index=False)
             
         st.download_button(
-            label="Tải file Excel đầy đủ (.xlsx)",
+            label="📥 Tải về file Excel đầy đủ",
             data=output.getvalue(),
-            file_name=f"Chi_dao_chi_tiet_{uploaded_file.name}.xlsx",
+            file_name=f"Ket_qua_chi_tiet.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
