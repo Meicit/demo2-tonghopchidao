@@ -1,63 +1,66 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
 from pypdf import PdfReader
 from docx import Document
 import pandas as pd
 import io
 
-# 1. Cấu hình trang
-st.set_page_config(page_title="Hệ thống AI Hành chính", layout="wide")
-st.title("🏛️ Trợ lý Trích xuất & Xuất Excel")
+# --- 1. CẤU HÌNH ---
+st.set_page_config(page_title="AI Hành Chính 2026", layout="wide")
+st.title("🏛️ Hệ thống Trích xuất Chỉ đạo (Bản Cập nhật mới nhất)")
 
-# 2. Khởi tạo AI
+# Khởi tạo Client với thư viện mới
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Vui lòng thêm GEMINI_API_KEY vào mục Secrets!")
+    st.error("❌ Thiếu API Key trong Secrets!")
     st.stop()
 
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash')
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# 3. Xử lý file
-file = st.file_uploader("Tải lên PDF hoặc Word", type=["pdf", "docx"])
+# Lưu kết quả
+if 'data' not in st.session_state:
+    st.session_state['data'] = None
 
-if file:
-    text = ""
+# --- 2. HÀM ĐỌC FILE ---
+def extract_text(file):
     try:
         if file.type == "application/pdf":
-            reader = PdfReader(file)
-            text = "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
-        else:
-            doc = Document(file)
-            text = "\n".join([p.text for p in doc.paragraphs])
+            return "\n".join([p.extract_text() for p in PdfReader(file).pages if p.extract_text()])
+        return "\n".join([p.text for p in Document(file).paragraphs])
     except Exception as e:
         st.error(f"Lỗi đọc file: {e}")
+        return ""
 
-    if st.button("🚀 Phân tích & Trích xuất"):
-        if not text:
-            st.warning("Không thể đọc nội dung file.")
-        else:
-            with st.spinner("AI đang xử lý..."):
+# --- 3. GIAO DIỆN ---
+uploaded_file = st.file_uploader("Tải lên văn bản (PDF, DOCX)", type=["pdf", "docx"])
+
+if uploaded_file:
+    if st.button("🚀 BẮT ĐẦU TRÍCH XUẤT"):
+        text_content = extract_text(uploaded_file)
+        if text_content:
+            with st.spinner("AI đang xử lý bằng công nghệ mới nhất..."):
                 try:
-                    # Prompt yêu cầu bảng đơn giản
-                    prompt = f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê đầy đủ, không tóm tắt:\n\n{text[:15000]}"
-                    response = model.generate_content(prompt)
-                    res_text = response.text
-                    
-                    st.markdown("### ✅ Kết quả phân tích")
-                    st.markdown(res_text)
-                    
-                    # Tạo file Excel từ kết quả
-                    output = io.BytesIO()
-                    # Chia nhỏ text thành dòng để Excel dễ nhìn hơn
-                    df_export = pd.DataFrame([{"Nội dung trích xuất": res_text}])
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_export.to_excel(writer, index=False)
-                    
-                    st.download_button(
-                        label="📥 Tải về Excel",
-                        data=output.getvalue(),
-                        file_name=f"Trich_xuat_{file.name}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    # Cách gọi mới của thư viện google-genai
+                    response = client.models.generate_content(
+                        model="gemini-1.5-flash",
+                        contents=f"Trích xuất tất cả nhiệm vụ thành bảng (STT | Nhiệm vụ | Đơn vị | Thời hạn). Liệt kê đầy đủ, không tóm tắt:\n\n{text_content[:15000]}"
                     )
+                    st.session_state['data'] = response.text
                 except Exception as e:
                     st.error(f"Lỗi AI: {e}")
+
+    if st.session_state['data']:
+        st.markdown("### ✅ Kết quả trích xuất")
+        st.markdown(st.session_state['data'])
+        
+        # Tạo file Excel đơn giản
+        df_export = pd.DataFrame([{"Nội dung": st.session_state['data']}])
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_export.to_excel(writer, index=False)
+            
+        st.download_button(
+            label="📥 Tải về Excel",
+            data=output.getvalue(),
+            file_name=f"Chi_dao_{uploaded_file.name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
